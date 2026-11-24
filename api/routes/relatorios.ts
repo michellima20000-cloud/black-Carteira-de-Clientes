@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import type { Request, Response } from 'express'
-import { pool } from '../db'
+import { pool } from '../db.js'
 
 export default Router()
   // GET - Resumo de clientes (total, novos, etc.)

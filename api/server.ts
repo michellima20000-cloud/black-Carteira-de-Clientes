@@ -1,9 +1,9 @@
 import express from 'express'
 import cors from 'cors'
-import { pool } from './db'
-import clienteRoutes from './routes/clientes'
-import historicoRoutes from './routes/historico'
-import relatorioRoutes from './routes/relatorios'
+import { pool } from './db.js'
+import clienteRoutes from './routes/clientes.js'
+import historicoRoutes from './routes/historico.js'
+import relatorioRoutes from './routes/relatorios.js'
 
 // Usar variáveis de ambiente do Render / ambiente
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001
