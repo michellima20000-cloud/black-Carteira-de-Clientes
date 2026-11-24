@@ -4,6 +4,7 @@ import { LoadingScreen } from './components/LoadingScreen';
 import { AccountChoicePage } from './pages/AccountChoicePage';
 import { DashboardPage } from './pages/DashboardPage';
 import { LoginPage } from './pages/LoginPage';
+import { SignupPage } from './pages/SignupPage';
 import { NotFoundPage } from './pages/NotFoundPage';
 import { ProtectedRoute } from './routes/ProtectedRoute';
 import { PublicOnlyRoute } from './routes/PublicOnlyRoute';
@@ -26,6 +27,7 @@ export default function App() {
           <Route path="/" element={<RootRedirect />} />
           <Route element={<PublicOnlyRoute />}>
             <Route path="/entrar" element={<LoginPage />} />
+            <Route path="/signup" element={<SignupPage />} />
           </Route>
           <Route element={<ProtectedRoute />}>
             <Route path="/conta" element={<AccountChoicePage />} />
