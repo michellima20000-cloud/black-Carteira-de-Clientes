@@ -4,7 +4,7 @@ import { LoadingScreen } from './components/LoadingScreen';
 import { AccountChoicePage } from './pages/AccountChoicePage';
 import { DashboardPage } from './pages/DashboardPage';
 import { LoginPage } from './pages/LoginPage';
-import { SignupPage } from './pages/SignupPage';
+import SignupPage from './pages/SignupPage';
 import { NotFoundPage } from './pages/NotFoundPage';
 import { ProtectedRoute } from './routes/ProtectedRoute';
 import { PublicOnlyRoute } from './routes/PublicOnlyRoute';
