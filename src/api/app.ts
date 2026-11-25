@@ -42,8 +42,10 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   const ownsDatabase = !options.database;
   const database = options.database ?? createDatabaseClient(config.databaseUrl);
   const ownsRedis = !options.redis;
+  const isExternalRedis = !config.redisUrl.includes('localhost') && !config.redisUrl.includes('127.0.0.1');
   const redis = options.redis ?? createApiRedis(config.redisUrl);
-  const ownsQueueManager = !options.queueManager && !options.redis;
+  // Só cria BullMQ se houver Redis externo configurado; evita loop de reconexão em Render sem Redis
+  const ownsQueueManager = !options.queueManager && !options.redis && isExternalRedis;
   const queueRedis = ownsQueueManager ? createBullRedis(config.redisUrl) : undefined;
   const queueManager =
     options.queueManager ?? (queueRedis ? new QueueManager(queueRedis) : undefined);

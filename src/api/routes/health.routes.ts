@@ -36,10 +36,13 @@ export function registerHealthRoutes(app: FastifyInstance, options: HealthRoutes
       checkDatabase(options.database),
       checkRedis(options.redis),
     ]);
-    const healthy = database === 'up' && redis === 'up';
+    // A API é considerada saudável enquanto o banco estiver up.
+    // Redis offline deixa o serviço "degraded" mas ainda operacional (200).
+    const healthy = database === 'up';
+    const status = healthy ? (redis === 'up' ? 'ok' : 'degraded') : 'down';
 
     return reply.code(healthy ? 200 : 503).send({
-      status: healthy ? 'ok' : 'degraded',
+      status,
       database,
       redis,
       timestamp: new Date().toISOString(),
