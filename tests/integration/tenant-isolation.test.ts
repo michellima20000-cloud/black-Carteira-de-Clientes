@@ -40,6 +40,7 @@ function testConfig(databaseUrl: string): AppConfig {
       accessTtlSeconds: 900,
       refreshTtlDays: 7,
     },
+    encryptionKey: 'encryption-key-for-tests-with-at-least-16-characters',
     corsOrigins: ['http://localhost:5173'],
     cookie: {
       name: 'refresh_token',
