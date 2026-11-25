@@ -9,7 +9,7 @@ import makeWASocket, {
 } from '@whiskeysockets/baileys';
 import type { DatabaseClient } from '../../shared/db/prisma';
 import { TenantStore } from '../../shared/db/tenant-store';
-import { WhatsappSessionStore } from './qr-session.store';
+import { WhatsappSessionStore, type WhatsappSessionRow } from './qr-session.store';
 
 export type QrSessionStatus =
   | 'IDLE'
@@ -143,7 +143,14 @@ export class WhatsappSessionManager {
       this.sessions.delete(accountId);
     }
 
-    const stored = await this.store.load(accountId);
+    let stored: WhatsappSessionRow | null = null;
+    try {
+      stored = await this.store.load(accountId);
+    } catch (error) {
+      // Sem persistência a sessão ainda funciona, mas precisa ser escaneada novamente.
+      this.logger?.warn({ err: error, accountId }, 'Sessão anterior não pôde ser carregada');
+    }
+
     const creds: AuthenticationCreds = (stored?.creds as AuthenticationCreds | null) ?? initAuthCreds();
     const keys = this.store.createKeyStore(accountId, stored?.keys ?? {});
     const latest = await fetchLatestBaileysVersion();
