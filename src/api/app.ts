@@ -22,6 +22,8 @@ import { registerConversationRoutes } from '../modules/whatsapp/conversation.rou
 import { registerQuickReplyRoutes } from '../modules/whatsapp/quick-reply.routes';
 import { registerWhatsappConfigRoutes } from '../modules/whatsapp/whatsapp-config.routes';
 import { registerWhatsappWebhookRoutes } from '../modules/whatsapp/whatsapp-webhook.routes';
+import { WhatsappSessionManager } from '../modules/whatsapp/qr-session.manager';
+import { registerWhatsappQrRoutes } from '../modules/whatsapp/qr.routes';
 import { loadConfig, type AppConfig } from '../shared/config/env';
 import { createDatabaseClient, type DatabaseClient } from '../shared/db/prisma';
 import { ensureWhatsappConfigSchema } from '../shared/db/schema-guard';
@@ -111,6 +113,16 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
 
   registerAuthPlugin(app, tokens);
 
+  const whatsappSessions = new WhatsappSessionManager({
+    database,
+    encryptionKey: config.encryptionKey,
+    logger: {
+      info: (payload, message) => app.log.info(payload, message),
+      warn: (payload, message) => app.log.warn(payload, message),
+      error: (payload, message) => app.log.error(payload, message),
+    },
+  });
+
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof AppError) {
       return reply.code(error.statusCode).send({
@@ -150,12 +162,17 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   }
 
   registerHealthRoutes(app, { database, redis });
-  registerAuthRoutes(app, { config, database });  registerAccountRoutes(app, { database });
+  registerAuthRoutes(app, { config, database });
+  registerAccountRoutes(app, { database });
   registerCustomerRoutes(app, { database });
   registerSaleRoutes(app, { database });
   registerImportRoutes(app, { database });
   registerGoalRoutes(app, { database });
-  registerConversationRoutes(app, { database, queueManager });
+  registerConversationRoutes(app, {
+    database,
+    queueManager,
+    directSender: (accountId, toPhone, body) => whatsappSessions.sendMessage(accountId, toPhone, body),
+  });
   registerQuickReplyRoutes(app, { database });
   registerBlocklistRoutes(app, { database });
   registerWhatsappWebhookRoutes(app, {
@@ -168,6 +185,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     apiBaseUrl: config.apiBaseUrl,
     encryptionKey: config.encryptionKey,
   });
+  registerWhatsappQrRoutes(app, { sessions: whatsappSessions });
   registerTemplateRoutes(app, { database });
   registerReactivationRoutes(app, { database, queueManager });
   registerComplianceRoutes(app, { database });
@@ -176,11 +194,14 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     registerQueueRoutes(app, { queueManager });
   }
 
+  app.addHook('onReady', async () => {
+    await whatsappSessions.restoreSessions();
+  });
+
   app.addHook('onClose', async () => {
     if (ownsQueueManager && queueManager) {
       await queueManager.close();
-    }
-    if (queueRedis) {
+    }    if (queueRedis) {
       await queueRedis.quit().catch(() => queueRedis.disconnect());
     }
     if (ownsRedis) {

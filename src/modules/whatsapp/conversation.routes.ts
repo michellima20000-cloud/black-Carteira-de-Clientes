@@ -17,6 +17,8 @@ import {
 export interface ConversationRoutesOptions {
   database: DatabaseClient;
   queueManager?: QueueManager | undefined;
+  /** Envia a mensagem diretamente pelo WhatsApp Web (sessão QR) quando disponível. */
+  directSender?: ((accountId: string, toPhone: string, body: string) => Promise<boolean>) | undefined;
 }
 
 export function registerConversationRoutes(
@@ -83,6 +85,19 @@ export function registerConversationRoutes(
         toPhone: conversation.customer.phone,
         body: input.body,
       });
+    } else if (options.directSender) {
+      const delivered = await options.directSender(
+        request.authContext!.accountId,
+        conversation.customer.phone,
+        input.body,
+      );
+
+      if (!delivered) {
+        app.log.warn(
+          { conversationId: conversation.id },
+          'Não há sessão de WhatsApp Web ativa para enviar a mensagem',
+        );
+      }
     }
 
     return reply.code(201).send({ data: { message, conversation } });
