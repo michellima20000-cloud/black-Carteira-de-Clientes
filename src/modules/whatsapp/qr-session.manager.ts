@@ -75,6 +75,30 @@ export interface WhatsappSessionManagerOptions {
  * O usuário conecta lendo um QR Code no próprio celular (Aparelhos conectados),
  * sem precisar de conta Meta Business, token ou webhook.
  */
+/** Logger silencioso compatível com a interface esperada pelo Baileys (pino-like). */
+interface SocketLogger {
+  level: string;
+  child: (obj: Record<string, unknown>) => SocketLogger;
+  trace: (obj: unknown, msg?: string) => void;
+  debug: (obj: unknown, msg?: string) => void;
+  info: (obj: unknown, msg?: string) => void;
+  warn: (obj: unknown, msg?: string) => void;
+  error: (obj: unknown, msg?: string) => void;
+}
+
+function createSilentLogger(): SocketLogger {
+  const noop = () => undefined;
+  return {
+    level: 'silent',
+    child: () => createSilentLogger(),
+    trace: noop,
+    debug: noop,
+    info: noop,
+    warn: noop,
+    error: noop,
+  };
+}
+
 export class WhatsappSessionManager {
   private readonly sessions = new Map<string, SessionRuntime>();
   private readonly store: WhatsappSessionStore;
@@ -128,7 +152,7 @@ export class WhatsappSessionManager {
     const socket = makeWASocket({
       version,
       auth: { creds, keys },
-      logger: { level: 'silent' } as never,
+      logger: createSilentLogger(),
       browser: Browsers.ubuntu('Chrome'),
       markOnlineOnConnect: false,
       syncFullHistory: false,
