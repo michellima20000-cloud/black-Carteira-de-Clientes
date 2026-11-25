@@ -1,0 +1,338 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum AccountPlan {
+  STARTER
+  PRO
+}
+
+enum UserRole {
+  OWNER
+  ADMIN
+  AGENT
+}
+
+enum CustomerStatus {
+  ACTIVE
+  BLOCKED
+}
+
+enum SaleSource {
+  MANUAL
+  IMPORT
+}
+
+enum GoalDistributionMode {
+  EQUAL
+  HISTORICAL
+}
+
+enum ConversationStatus {
+  BOT
+  AGUARDANDO_HUMANO
+  EM_ATENDIMENTO
+  FINALIZADA
+}
+
+enum MessageDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum MessageStatus {
+  RECEIVED
+  QUEUED
+  SENT
+  DELIVERED
+  READ
+  FAILED
+}
+
+enum TemplateStatus {
+  DRAFT
+  APPROVED
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  LOGIN
+  LOGOUT
+}
+
+model Account {
+  id        String      @id @default(uuid()) @db.Uuid
+  slug      String      @unique @db.VarChar(80)
+  name      String      @db.VarChar(160)
+  plan      AccountPlan @default(STARTER)
+  timezone  String      @default("America/Sao_Paulo") @db.VarChar(80)
+  createdAt DateTime    @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime    @updatedAt @db.Timestamptz(3)
+
+  users                User[]
+  refreshTokens        RefreshToken[]
+  whatsappConfig       WhatsappConfig?
+  quickReplies         QuickReply[]
+  customers            Customer[]
+  sales                Sale[]
+  monthlyGoals         MonthlyGoal[]
+  customerGoals        CustomerGoal[]
+  conversations        Conversation[]
+  messages             Message[]
+  messageTemplates     MessageTemplate[]
+  blocklistEntries     BlocklistEntry[]
+  auditLogs            AuditLog[]
+
+  @@map("accounts")
+}
+
+model User {
+  id           String   @id @default(uuid()) @db.Uuid
+  accountId    String   @db.Uuid
+  name         String   @db.VarChar(160)
+  email        String   @unique @db.VarChar(320)
+  passwordHash String   @db.VarChar(255)
+  role         UserRole @default(AGENT)
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @db.Timestamptz(3)
+
+  account               Account        @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  refreshTokens         RefreshToken[]
+  ownedCustomers        Customer[]     @relation("CustomerOwner")
+  assignedConversations Conversation[] @relation("ConversationAssignee")
+  sentMessages          Message[]      @relation("MessageSender")
+  salesCreated          Sale[]         @relation("SaleCreator")
+  auditLogs             AuditLog[]      @relation("AuditActor")
+
+  @@index([accountId, role])
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  accountId String    @db.Uuid
+  userId    String    @db.Uuid
+  tokenHash String    @unique @db.Char(64)
+  expiresAt DateTime  @db.Timestamptz(3)
+  revokedAt DateTime? @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([accountId, userId])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
+}
+
+model WhatsappConfig {
+  id                   String   @id @default(uuid()) @db.Uuid
+  accountId            String   @unique @db.Uuid
+  phoneNumber          String   @db.VarChar(24)
+  provider             String   @default("META") @db.VarChar(40)
+  accessTokenEncrypted String   @db.Text
+  webhookSecretEncrypted String @db.Text
+  createdAt            DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime @updatedAt @db.Timestamptz(3)
+
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@map("whatsapp_configs")
+}
+
+model Customer {
+  id             String         @id @default(uuid()) @db.Uuid
+  accountId      String         @db.Uuid
+  ownerId        String?        @db.Uuid
+  name           String         @db.VarChar(160)
+  phone          String         @db.VarChar(24)
+  city           String?        @db.VarChar(120)
+  notes          String?        @db.Text
+  status         CustomerStatus @default(ACTIVE)
+  lastPurchaseAt DateTime?      @db.Timestamptz(3)
+  nextContactAt  DateTime?      @db.Timestamptz(3)
+  createdAt      DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime       @updatedAt @db.Timestamptz(3)
+
+  account       Account        @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  owner         User?          @relation("CustomerOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  sales         Sale[]
+  goals         CustomerGoal[]
+  conversations Conversation[]
+
+  @@unique([accountId, phone])
+  @@index([accountId, lastPurchaseAt])
+  @@index([accountId, ownerId])
+  @@index([accountId, status])
+  @@map("customers")
+}
+
+model Sale {
+  id          String    @id @default(uuid()) @db.Uuid
+  accountId   String    @db.Uuid
+  customerId  String    @db.Uuid
+  createdById String?   @db.Uuid
+  soldAt      DateTime  @db.Date
+  amount      Decimal   @db.Decimal(14, 2)
+  observation String?   @db.Text
+  source      SaleSource @default(MANUAL)
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @db.Timestamptz(3)
+
+  account   Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  customer  Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  createdBy User?    @relation("SaleCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([accountId, customerId, soldAt])
+  @@index([accountId, soldAt])
+  @@map("sales")
+}
+
+model MonthlyGoal {
+  id               String               @id @default(uuid()) @db.Uuid
+  accountId        String               @db.Uuid
+  month            DateTime             @db.Date
+  totalAmount      Decimal              @db.Decimal(14, 2)
+  distributionMode GoalDistributionMode @default(EQUAL)
+  createdAt        DateTime             @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime             @updatedAt @db.Timestamptz(3)
+
+  account   Account        @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  customers CustomerGoal[]
+
+  @@unique([accountId, month])
+  @@index([accountId])
+  @@map("monthly_goals")
+}
+
+model CustomerGoal {
+  id         String   @id @default(uuid()) @db.Uuid
+  accountId  String   @db.Uuid
+  goalId     String   @db.Uuid
+  customerId String   @db.Uuid
+  amount     Decimal  @db.Decimal(14, 2)
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime @updatedAt @db.Timestamptz(3)
+
+  account  Account     @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  goal     MonthlyGoal @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  customer Customer    @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@unique([goalId, customerId])
+  @@index([accountId, customerId])
+  @@map("customer_goals")
+}
+
+model Conversation {
+  id               String             @id @default(uuid()) @db.Uuid
+  accountId        String             @db.Uuid
+  customerId       String             @db.Uuid
+  assignedUserId   String?            @db.Uuid
+  status           ConversationStatus @default(BOT)
+  lastMessageAt    DateTime?           @db.Timestamptz(3)
+  lastMessagePreview String?            @db.VarChar(240)
+  createdAt        DateTime            @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime            @updatedAt @db.Timestamptz(3)
+
+  account      Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  customer     Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  assignedUser User?     @relation("ConversationAssignee", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  messages     Message[]
+
+  @@index([accountId, status, lastMessageAt])
+  @@index([accountId, customerId])
+  @@map("conversations")
+}
+
+model Message {
+  id             String          @id @default(uuid()) @db.Uuid
+  accountId      String          @db.Uuid
+  conversationId String          @db.Uuid
+  senderId       String?         @db.Uuid
+  direction      MessageDirection
+  status         MessageStatus   @default(RECEIVED)
+  provider       String?         @db.VarChar(40)
+  externalId     String?         @unique @db.VarChar(255)
+  body           String          @db.Text
+  sentAt         DateTime        @default(now()) @db.Timestamptz(3)
+
+  account      Account      @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender       User?        @relation("MessageSender", fields: [senderId], references: [id], onDelete: SetNull)
+
+  @@index([accountId, conversationId, sentAt])
+  @@map("messages")
+}
+
+model QuickReply {
+  id        String   @id @default(uuid()) @db.Uuid
+  accountId String   @db.Uuid
+  name      String   @db.VarChar(120)
+  trigger   String?  @db.VarChar(120)
+  text      String   @db.Text
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([accountId, name])
+  @@index([accountId, active])
+  @@map("quick_replies")
+}
+
+model MessageTemplate {
+  id        String         @id @default(uuid()) @db.Uuid
+  accountId String         @db.Uuid
+  name      String         @db.VarChar(120)
+  content   String         @db.Text
+  category  String?        @db.VarChar(80)
+  status    TemplateStatus @default(DRAFT)
+  createdAt DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime       @updatedAt @db.Timestamptz(3)
+
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([accountId, name])
+  @@index([accountId, status])
+  @@map("message_templates")
+}
+
+model BlocklistEntry {
+  id        String   @id @default(uuid()) @db.Uuid
+  accountId String   @db.Uuid
+  phone     String   @db.VarChar(24)
+  reason    String?  @db.VarChar(240)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([accountId, phone])
+  @@map("blocklist_entries")
+}
+
+model AuditLog {
+  id         String      @id @default(uuid()) @db.Uuid
+  accountId  String      @db.Uuid
+  actorUserId String?    @db.Uuid
+  action     AuditAction
+  entityType String      @db.VarChar(80)
+  entityId   String?     @db.VarChar(255)
+  metadata   Json?
+  createdAt  DateTime    @default(now()) @db.Timestamptz(3)
+
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  actor   User?   @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([accountId, createdAt])
+  @@index([accountId, entityType, entityId])
+  @@map("audit_logs")
+}

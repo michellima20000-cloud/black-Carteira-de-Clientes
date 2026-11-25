@@ -1,30 +1,38 @@
-# syntax=docker/dockerfile:1.7
-
-FROM node:20-alpine AS build
-
+FROM node:20-bookworm-slim AS dependencies
 WORKDIR /app
-
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends openssl ca-certificates python3 make g++ \
+  && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./
+COPY prisma ./prisma
 RUN npm ci
 
-COPY . .
-
-ARG VITE_API_URL=http://localhost:3000
-ENV VITE_API_URL=${VITE_API_URL}
-
+FROM dependencies AS build
+COPY tsconfig.json tsconfig.build.json ./
+COPY src ./src
 RUN npm run build
 
-FROM nginx:alpine AS runtime
+FROM build AS production-dependencies
+RUN npm prune --omit=dev
 
-ENV API_PROXY_URL=http://api:3000 \
-    NGINX_ENVSUBST_FILTER=^API_PROXY_URL$
+FROM node:20-bookworm-slim AS runtime
+ENV NODE_ENV=production
+WORKDIR /app
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends openssl ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+COPY --from=production-dependencies /app/node_modules ./node_modules
+COPY --from=build /app/dist ./dist
+USER node
 
-COPY nginx.conf.template /etc/nginx/templates/default.conf.template
-COPY --from=build /app/dist /usr/share/nginx/html
+FROM build AS migration
+CMD ["npm", "run", "prisma:migrate:deploy"]
 
-EXPOSE 80
+FROM runtime AS api
+EXPOSE 3000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:3000/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+CMD ["node", "dist/api/server.js"]
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD wget -q --spider http://127.0.0.1/health || exit 1
-
-CMD ["nginx", "-g", "daemon off;"]
+FROM runtime AS worker
+CMD ["node", "dist/worker/index.js"]

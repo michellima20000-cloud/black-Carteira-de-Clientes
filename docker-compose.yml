@@ -1,0 +1,110 @@
+name: black-carteira
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-black_carteira}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-black_carteira_local}
+      POSTGRES_DB: ${POSTGRES_DB:-black_carteira}
+    ports:
+      - '${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'pg_isready -U ${POSTGRES_USER:-black_carteira} -d ${POSTGRES_DB:-black_carteira}',
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    ports:
+      - '${REDIS_PORT:-6379}:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  migrate:
+    build:
+      context: .
+      target: migration
+    command: ['npm', 'run', 'prisma:migrate:deploy']
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-black_carteira}:${POSTGRES_PASSWORD:-black_carteira_local}@postgres:5432/${POSTGRES_DB:-black_carteira}?schema=public
+      SEED_PASSWORD: ${SEED_PASSWORD:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: 'no'
+
+  api:
+    build:
+      context: .
+      target: api
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3000
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-black_carteira}:${POSTGRES_PASSWORD:-black_carteira_local}@postgres:5432/${POSTGRES_DB:-black_carteira}?schema=public
+      REDIS_URL: redis://redis:6379
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?configure JWT_ACCESS_SECRET no arquivo .env}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?configure JWT_REFRESH_SECRET no arquivo .env}
+      JWT_ISSUER: ${JWT_ISSUER:-black-carteira-api}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-black-carteira-painel}
+      ACCESS_TOKEN_TTL_SECONDS: ${ACCESS_TOKEN_TTL_SECONDS:-900}
+      REFRESH_TOKEN_TTL_DAYS: ${REFRESH_TOKEN_TTL_DAYS:-7}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+      RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-100}
+      RATE_LIMIT_WINDOW: ${RATE_LIMIT_WINDOW:-1 minute}
+      LOGIN_RATE_LIMIT_MAX: ${LOGIN_RATE_LIMIT_MAX:-5}
+      LOGIN_RATE_LIMIT_WINDOW: ${LOGIN_RATE_LIMIT_WINDOW:-1 minute}
+      API_BASE_URL: ${API_BASE_URL:-http://localhost:3000}
+    ports:
+      - '${API_PORT:-3000}:3000'
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      target: worker
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-black_carteira}:${POSTGRES_PASSWORD:-black_carteira_local}@postgres:5432/${POSTGRES_DB:-black_carteira}?schema=public
+      REDIS_URL: redis://redis:6379
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?configure JWT_ACCESS_SECRET no arquivo .env}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?configure JWT_REFRESH_SECRET no arquivo .env}
+      JWT_ISSUER: ${JWT_ISSUER:-black-carteira-api}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-black-carteira-painel}
+      ACCESS_TOKEN_TTL_SECONDS: ${ACCESS_TOKEN_TTL_SECONDS:-900}
+      REFRESH_TOKEN_TTL_DAYS: ${REFRESH_TOKEN_TTL_DAYS:-7}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+      API_BASE_URL: ${API_BASE_URL:-http://localhost:3000}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:

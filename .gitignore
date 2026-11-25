@@ -2,9 +2,10 @@ node_modules/
 dist/
 coverage/
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
 *.log
+backups/
 .DS_Store
 .vscode/
 .idea/
