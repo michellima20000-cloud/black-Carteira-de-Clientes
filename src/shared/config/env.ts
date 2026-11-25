@@ -11,6 +11,7 @@ const envSchema = z.object({
   JWT_REFRESH_SECRET: z.string().min(32).default('black-carteira-default-jwt-refresh-secret-32-chars-min'),
   JWT_ISSUER: z.string().min(1).default('black-carteira-api'),
   JWT_AUDIENCE: z.string().min(1).default('black-carteira-painel'),
+  ENCRYPTION_KEY: z.string().min(16).optional(),
   ACCESS_TOKEN_TTL_SECONDS: z.coerce.number().int().positive().default(900),
   REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(7),
   CORS_ORIGINS: z.string().default('http://localhost:5173'),
@@ -42,6 +43,7 @@ export interface AppConfig {
     accessTtlSeconds: number;
     refreshTtlDays: number;
   };
+  encryptionKey: string;
   corsOrigins: string[];
   cookie: {
     name: string;
@@ -78,6 +80,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
       accessTtlSeconds: parsed.ACCESS_TOKEN_TTL_SECONDS,
       refreshTtlDays: parsed.REFRESH_TOKEN_TTL_DAYS,
     },
+    encryptionKey: parsed.ENCRYPTION_KEY ?? parsed.JWT_ACCESS_SECRET,
     corsOrigins: parsed.CORS_ORIGINS.split(',')
       .map((origin) => origin.trim())
       .filter(Boolean),

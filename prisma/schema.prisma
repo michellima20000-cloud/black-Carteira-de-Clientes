@@ -137,6 +137,7 @@ model WhatsappConfig {
   id                   String   @id @default(uuid()) @db.Uuid
   accountId            String   @unique @db.Uuid
   phoneNumber          String   @db.VarChar(24)
+  phoneNumberId        String?  @db.VarChar(40)
   provider             String   @default("META") @db.VarChar(40)
   accessTokenEncrypted String   @db.Text
   webhookSecretEncrypted String @db.Text

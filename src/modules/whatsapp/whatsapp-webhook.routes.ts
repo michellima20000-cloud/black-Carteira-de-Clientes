@@ -4,6 +4,7 @@ import type { DatabaseClient } from '../../shared/db/prisma';
 import { TenantStore } from '../../shared/db/tenant-store';
 import { NotFoundError, UnauthorizedError } from '../../shared/http/app-error';
 import { parseInput } from '../../shared/http/validation';
+import { decryptSecret } from '../../shared/security/secret-box';
 import type { QueueManager } from '../../shared/queues/queue-manager';
 import { QUEUE_NAMES } from '../../shared/queues/queue-names';
 import { genericWebhookPayloadSchema, metaWebhookQuerySchema } from './whatsapp.schemas';
@@ -11,6 +12,7 @@ import { genericWebhookPayloadSchema, metaWebhookQuerySchema } from './whatsapp.
 export interface WhatsappWebhookRoutesOptions {
   database: DatabaseClient;
   queueManager?: QueueManager | undefined;
+  encryptionKey: string;
 }
 
 const accountIdParamsSchema = z.object({
@@ -36,7 +38,11 @@ export function registerWhatsappWebhookRoutes(
     }
 
     if (query['hub.mode'] === 'subscribe') {
-      if (query['hub.verify_token'] === config.webhookSecretEncrypted) {
+      const expectedSecret = decryptSecret(
+        config.webhookSecretEncrypted,
+        options.encryptionKey,
+      );
+      if (query['hub.verify_token'] === expectedSecret) {
         return reply.code(200).send(query['hub.challenge'] ?? 'OK');
       }
       throw new UnauthorizedError('Token de verificação incorreto.');

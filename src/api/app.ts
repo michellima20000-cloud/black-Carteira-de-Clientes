@@ -20,6 +20,7 @@ import { registerTemplateRoutes } from '../modules/templates/template.routes';
 import { registerBlocklistRoutes } from '../modules/whatsapp/blocklist.routes';
 import { registerConversationRoutes } from '../modules/whatsapp/conversation.routes';
 import { registerQuickReplyRoutes } from '../modules/whatsapp/quick-reply.routes';
+import { registerWhatsappConfigRoutes } from '../modules/whatsapp/whatsapp-config.routes';
 import { registerWhatsappWebhookRoutes } from '../modules/whatsapp/whatsapp-webhook.routes';
 import { loadConfig, type AppConfig } from '../shared/config/env';
 import { createDatabaseClient, type DatabaseClient } from '../shared/db/prisma';
@@ -149,7 +150,16 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   registerConversationRoutes(app, { database, queueManager });
   registerQuickReplyRoutes(app, { database });
   registerBlocklistRoutes(app, { database });
-  registerWhatsappWebhookRoutes(app, { database, queueManager });
+  registerWhatsappWebhookRoutes(app, {
+    database,
+    queueManager,
+    encryptionKey: config.encryptionKey,
+  });
+  registerWhatsappConfigRoutes(app, {
+    database,
+    apiBaseUrl: config.apiBaseUrl,
+    encryptionKey: config.encryptionKey,
+  });
   registerTemplateRoutes(app, { database });
   registerReactivationRoutes(app, { database, queueManager });
   registerComplianceRoutes(app, { database });
