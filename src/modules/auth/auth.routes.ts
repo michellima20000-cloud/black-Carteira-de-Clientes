@@ -3,7 +3,7 @@ import type { AppConfig } from '../../shared/config/env';
 import type { DatabaseClient } from '../../shared/db/prisma';
 import { parseInput } from '../../shared/http/validation';
 import { AuthService } from './auth.service';
-import { loginSchema, refreshSchema } from './auth.schemas';
+import { loginSchema, refreshSchema, registerSchema } from './auth.schemas';
 import { TokenService } from './token.service';
 
 export interface AuthRoutesOptions {
@@ -69,4 +69,22 @@ export function registerAuthRoutes(app: FastifyInstance, options: AuthRoutesOpti
     );
     return reply.send({ data: user });
   });
+
+  // Registro público: cria conta + usuário OWNER e retorna sessão
+  app.post(
+    '/auth/register',
+    {
+      config: {
+        rateLimit: {
+          max: 10,
+          timeWindow: '1h',
+        },
+      },
+    },
+    async (request, reply) => {
+      const input = parseInput(registerSchema, request.body);
+      const session = await service.register(input);
+      return reply.code(201).send({ data: session });
+    },
+  );
 }

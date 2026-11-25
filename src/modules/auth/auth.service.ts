@@ -1,8 +1,9 @@
 import argon2 from 'argon2';
 import type { Account, User, UserRole } from '@prisma/client';
 import type { DatabaseClient } from '../../shared/db/prisma';
-import { UnauthorizedError } from '../../shared/http/app-error';
+import { ConflictError, UnauthorizedError } from '../../shared/http/app-error';
 import type { TokenService } from './token.service';
+import type { RegisterInput } from './auth.schemas';
 
 type UserWithAccount = User & { account: Account };
 
@@ -130,6 +131,50 @@ export class AuthService {
     });
     if (!user) throw new UnauthorizedError();
     return this.toUserView(user);
+  }
+
+  async register(input: RegisterInput): Promise<AuthSession> {
+    const normalizedEmail = input.email.trim().toLowerCase();
+
+    const existing = await this.database.user.findUnique({ where: { email: normalizedEmail } });
+    if (existing) throw new ConflictError('E-mail já cadastrado.');
+
+    // Gera slug único a partir do nome da conta
+    const baseSlug = input.accountName
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '')
+      .slice(0, 50);
+
+    const suffix = Math.random().toString(36).slice(2, 7);
+    const slug = `${baseSlug}-${suffix}`;
+
+    const passwordHash = await argon2.hash(input.password);
+
+    const user = await this.database.$transaction(async (tx) => {
+      const account = await tx.account.create({
+        data: {
+          slug,
+          name: input.accountName.trim(),
+          timezone: input.timezone,
+        },
+      });
+
+      return tx.user.create({
+        data: {
+          accountId: account.id,
+          name: input.name.trim(),
+          email: normalizedEmail,
+          passwordHash,
+          role: 'OWNER',
+        },
+        include: { account: true },
+      });
+    });
+
+    return this.createSession(user);
   }
 
   private async createSession(user: UserWithAccount): Promise<AuthSession> {
