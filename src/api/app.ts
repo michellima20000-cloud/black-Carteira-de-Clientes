@@ -131,12 +131,10 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     }
 
     request.log.error({ err: error }, 'Erro não tratado');
-    // TEMP diagnóstico — remover após identificar causa
     return reply.code(500).send({
       error: {
         code: 'INTERNAL_ERROR',
         message: 'Não foi possível concluir a operação.',
-        debug: { name: (error as Error).name, message: (error as Error).message },
       },
     });
   });
