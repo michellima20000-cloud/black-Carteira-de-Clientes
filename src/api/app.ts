@@ -24,6 +24,7 @@ import { registerWhatsappConfigRoutes } from '../modules/whatsapp/whatsapp-confi
 import { registerWhatsappWebhookRoutes } from '../modules/whatsapp/whatsapp-webhook.routes';
 import { loadConfig, type AppConfig } from '../shared/config/env';
 import { createDatabaseClient, type DatabaseClient } from '../shared/db/prisma';
+import { ensureWhatsappConfigSchema } from '../shared/db/schema-guard';
 import { AppError } from '../shared/http/app-error';
 import { QueueManager } from '../shared/queues/queue-manager';
 import { createApiRedis, createBullRedis } from '../shared/queues/redis';
@@ -140,9 +141,16 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     });
   });
 
+  // Garante as tabelas de configuração do WhatsApp mesmo em ambientes sem
+  // `prisma migrate deploy` no build (instruções idempotentes).
+  try {
+    await ensureWhatsappConfigSchema(database);
+  } catch (error) {
+    app.log.error({ err: error }, 'Não foi possível garantir o schema de configuração do WhatsApp');
+  }
+
   registerHealthRoutes(app, { database, redis });
-  registerAuthRoutes(app, { config, database });
-  registerAccountRoutes(app, { database });
+  registerAuthRoutes(app, { config, database });  registerAccountRoutes(app, { database });
   registerCustomerRoutes(app, { database });
   registerSaleRoutes(app, { database });
   registerImportRoutes(app, { database });
