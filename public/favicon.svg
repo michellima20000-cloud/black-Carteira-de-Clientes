@@ -1,7 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Carteira de Clientes">
-  <rect width="64" height="64" rx="18" fill="#102a43"/>
-  <path d="M17 20.5A5.5 5.5 0 0 1 22.5 15h20A4.5 4.5 0 0 1 47 19.5V44a5 5 0 0 1-5 5H22a5 5 0 0 1-5-5V20.5Z" fill="#f4b942"/>
-  <path d="M17 26h30v9H17z" fill="#fff8e8"/>
-  <circle cx="38" cy="30.5" r="2.5" fill="#102a43"/>
-  <path d="M22 39h11" stroke="#102a43" stroke-width="3" stroke-linecap="round"/>
-</svg>

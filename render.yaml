@@ -1,0 +1,45 @@
+services:
+  - type: web
+    name: black-carteira-api
+    runtime: node
+    plan: starter
+    buildCommand: npm ci && npm run build && npm run prisma:migrate:deploy
+    startCommand: npm run start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: HOST
+        value: 0.0.0.0
+      - key: CORS_ORIGINS
+        value: https://front-carteira-de-clientes-1ad8shzrm.vercel.app,https://front-carteira-de-clientes.vercel.app
+      - key: API_BASE_URL
+        value: https://black-carteira-de-clientes.onrender.com
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+
+  - type: worker
+    name: black-carteira-worker
+    runtime: node
+    plan: starter
+    buildCommand: npm ci && npm run build
+    startCommand: npm run worker
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: JWT_ACCESS_SECRET
+        sync: false
+      - key: JWT_REFRESH_SECRET
+        sync: false

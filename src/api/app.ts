@@ -72,7 +72,30 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   });
   await app.register(helmet, { contentSecurityPolicy: false });
   await app.register(cors, {
-    origin: config.corsOrigins,
+    origin: (origin, cb) => {
+      if (!origin) {
+        cb(null, true);
+        return;
+      }
+      if (config.corsOrigins.includes(origin) || config.corsOrigins.includes('*')) {
+        cb(null, true);
+        return;
+      }
+      try {
+        const url = new URL(origin);
+        if (
+          url.hostname.endsWith('.vercel.app') ||
+          url.hostname === 'localhost' ||
+          url.hostname === '127.0.0.1'
+        ) {
+          cb(null, true);
+          return;
+        }
+      } catch {
+        // Ignora URL inválida
+      }
+      cb(new Error('Origem não permitida pelo CORS'), false);
+    },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   });
