@@ -1,15 +1,30 @@
-import makeWASocket, {
-  Browsers,
-  BufferJSON,
-  DisconnectReason,
-  fetchLatestBaileysVersion,
-  initAuthCreds,
-  type AuthenticationCreds,
-  type WASocket,
-} from '@whiskeysockets/baileys';
+import type { AuthenticationCreds, WASocket } from '@whiskeysockets/baileys';
 import type { DatabaseClient } from '../../shared/db/prisma';
 import { TenantStore } from '../../shared/db/tenant-store';
 import { WhatsappSessionStore, type WhatsappSessionRow } from './qr-session.store';
+
+/**
+ * O Baileys é carregado sob demanda (import dinâmico) para que uma falha
+ * pontual na biblioteca nunca impeça a API de subir — o QR Code apenas
+ * responde com uma mensagem de erro amigável nesse caso.
+ */
+type BaileysModule = Awaited<ReturnType<typeof importBaileys>>;
+
+async function importBaileys(): Promise<
+  // eslint-disable-next-line @typescript-eslint/consistent-type-imports
+  typeof import('@whiskeysockets/baileys')
+> {
+  return import('@whiskeysockets/baileys');
+}
+
+let baileysModule: BaileysModule | null = null;
+
+async function loadBaileys(): Promise<BaileysModule> {
+  if (!baileysModule) {
+    baileysModule = await importBaileys();
+  }
+  return baileysModule;
+}
 
 export type QrSessionStatus =
   | 'IDLE'
@@ -151,16 +166,18 @@ export class WhatsappSessionManager {
       this.logger?.warn({ err: error, accountId }, 'Sessão anterior não pôde ser carregada');
     }
 
-    const creds: AuthenticationCreds = (stored?.creds as AuthenticationCreds | null) ?? initAuthCreds();
+    const baileys = await loadBaileys();
+    const creds: AuthenticationCreds =
+      (stored?.creds as AuthenticationCreds | null) ?? baileys.initAuthCreds();
     const keys = this.store.createKeyStore(accountId, stored?.keys ?? {});
-    const latest = await fetchLatestBaileysVersion();
+    const latest = await baileys.fetchLatestBaileysVersion();
     const version = latest.version;
 
-    const socket = makeWASocket({
+    const socket = baileys.makeWASocket({
       version,
       auth: { creds, keys },
       logger: createSilentLogger(),
-      browser: Browsers.ubuntu('Chrome'),
+      browser: baileys.Browsers.ubuntu('Chrome'),
       markOnlineOnConnect: false,
       syncFullHistory: false,
       generateHighQualityLinkPreview: false,
@@ -233,7 +250,7 @@ export class WhatsappSessionManager {
           status: 'DISCONNECTED',
           qr: null,
           error:
-            statusCode === DisconnectReason.loggedOut
+            statusCode === baileys.DisconnectReason.loggedOut
               ? 'Sessão encerrada no celular. Escaneie o QR Code novamente.'
               : null,
         });
@@ -347,9 +364,5 @@ export class WhatsappSessionManager {
   /** Converte o estado do Baileys em JSON serializável (usado em logs). */
   static describeState(state: QrSessionState): string {
     return JSON.stringify({ ...state, qr: state.qr ? 'presente' : null });
-  }
-
-  static stringifyForLog(value: unknown): string {
-    return JSON.stringify(value, BufferJSON.replacer);
   }
 }

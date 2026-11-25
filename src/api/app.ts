@@ -194,8 +194,11 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     registerQueueRoutes(app, { queueManager });
   }
 
-  app.addHook('onReady', async () => {
-    await whatsappSessions.restoreSessions();
+  app.addHook('onReady', () => {
+    // Restaura as sessões sem bloquear o boot da API.
+    void whatsappSessions.restoreSessions().catch((error: unknown) => {
+      app.log.warn({ err: error }, 'Falha ao restaurar as sessões do WhatsApp');
+    });
   });
 
   app.addHook('onClose', async () => {
