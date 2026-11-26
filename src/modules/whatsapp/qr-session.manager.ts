@@ -43,6 +43,8 @@ export interface QrSessionState {
   error: string | null;
   /** Indica se a sessão está sendo persistida no banco (ok = persistente). */
   storage: 'ok' | 'unavailable';
+  /** Detalhe do erro de persistência (quando storage = unavailable). */
+  storageError: string | null;
   updatedAt: string;
 }
 
@@ -134,6 +136,7 @@ export class WhatsappSessionManager {
   private readonly reconnectTimers = new Map<string, NodeJS.Timeout>();
   private readonly disconnecting = new Set<string>();
   private storageAvailable = true;
+  private storageError: string | null = null;
   private readonly store: WhatsappSessionStore;
   private readonly database: DatabaseClient;
   private readonly encryptionKey: string;
@@ -156,6 +159,7 @@ export class WhatsappSessionManager {
         phoneNumber: null,
         error: null,
         storage: this.storageAvailable ? 'ok' : 'unavailable',
+        storageError: this.storageError,
         updatedAt: new Date().toISOString(),
       }
     );
@@ -188,6 +192,7 @@ export class WhatsappSessionManager {
         phoneNumber: this.getState(accountId).phoneNumber,
         error: message,
         storage: this.storageAvailable ? 'ok' : 'unavailable',
+        storageError: this.storageError,
         updatedAt: new Date().toISOString(),
       });
       throw new AppError(500, 'WHATSAPP_QR_START_FAILED', message);
@@ -221,9 +226,11 @@ export class WhatsappSessionManager {
     try {
       stored = await this.store.load(accountId);
       this.storageAvailable = true;
+      this.storageError = null;
     } catch (error) {
       // Sem persistência a sessão ainda funciona, mas precisa ser escaneada novamente.
       this.storageAvailable = false;
+      this.storageError = error instanceof Error ? error.message : String(error);
       this.logger?.warn({ err: error, accountId }, 'Sessão anterior não pôde ser carregada');
     }
 
@@ -264,6 +271,7 @@ export class WhatsappSessionManager {
       phoneNumber: stored?.phoneNumber ?? null,
       error: null,
       storage: this.storageAvailable ? 'ok' : 'unavailable',
+      storageError: this.storageError,
       updatedAt: new Date().toISOString(),
     };
 
@@ -361,6 +369,19 @@ export class WhatsappSessionManager {
         if (loggedOut) {
           // Sessão encerrada no celular: limpa as credenciais para o próximo
           // QR Code começar de um pareamento totalmente novo.
+          void this.store.clear(accountId).catch(() => undefined);
+          this.sessions.delete(accountId);
+        } else if (restartRequired && !socket.authState.creds.registered) {
+          // O pareamento não foi concluído (ex.: o celular recusou ou o
+          // handshake falhou): o reinício não adianta — é preciso escanear
+          // um QR Code novo.
+          this.setState(accountId, {
+            ...this.getState(accountId),
+            status: 'ERROR',
+            qr: null,
+            error:
+              'O pareamento com o WhatsApp não foi concluído. Gere um novo QR Code e leia novamente no celular.',
+          });
           void this.store.clear(accountId).catch(() => undefined);
           this.sessions.delete(accountId);
         } else {
@@ -474,6 +495,7 @@ export class WhatsappSessionManager {
       phoneNumber: null,
       error: null,
       storage: this.storageAvailable ? 'ok' : 'unavailable',
+      storageError: this.storageError,
       updatedAt: new Date().toISOString(),
     });
 
@@ -483,11 +505,13 @@ export class WhatsappSessionManager {
   /** Restaura sessões já conectadas quando a API sobe. */
   async restoreSessions(): Promise<void> {
     try {
-      const rows = await this.database.$queryRawUnsafe<{ accountId: string }[]>(
-        `SELECT "accountId" FROM "whatsapp_sessions" WHERE "status" = 'CONNECTED'`,
-      );
+      const rows = await this.database.whatsappSession.findMany({
+        where: { status: 'CONNECTED' },
+        select: { accountId: true },
+      });
 
       this.storageAvailable = true;
+      this.storageError = null;
 
       for (const row of rows) {
         this.logger?.info({ accountId: row.accountId }, 'Restaurando sessão do WhatsApp');
@@ -495,6 +519,7 @@ export class WhatsappSessionManager {
       }
     } catch (error) {
       this.storageAvailable = false;
+      this.storageError = error instanceof Error ? error.message : String(error);
       this.logger?.warn({ err: error }, 'Não foi possível restaurar as sessões do WhatsApp');
     }
   }

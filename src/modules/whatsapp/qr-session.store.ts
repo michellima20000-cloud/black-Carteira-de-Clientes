@@ -54,13 +54,14 @@ export interface WhatsappSessionRow {
  */
 export type AppStateSyncKeyConverter = (value: unknown) => unknown;
 
-const TABLE = '"whatsapp_sessions"';
-
 /**
  * Persistência da sessão do WhatsApp Web (Baileys) no Postgres.
  *
- * Credenciais e chaves de sinal são gravadas criptografadas e restauradas
- * a cada start da API, evitando que o usuário precise escanear o QR novamente.
+ * Credenciais e chaves de sinal são gravadas criptografadas e restauradas a
+ * cada start da API, evitando que o usuário precise escanear o QR novamente.
+ *
+ * Usa o model `WhatsappSession` do Prisma (sem SQL manual) para que a
+ * persistência funcione em qualquer ambiente com as migrations aplicadas.
  */
 export class WhatsappSessionStore {
   /** Cache em memória das chaves de sinal (evita perder o handshake em restarts). */
@@ -72,33 +73,22 @@ export class WhatsappSessionStore {
   ) {}
 
   /** Verifica se a tabela de sessões está disponível no banco. */
-  async ping(): Promise<boolean> {
+  async ping(): Promise<{ ok: boolean; error: string | null }> {
     try {
-      await this.database.$queryRawUnsafe(`SELECT 1 FROM ${TABLE} LIMIT 1`);
-      return true;
-    } catch {
-      return false;
+      await this.database.whatsappSession.findFirst({ select: { accountId: true } });
+      return { ok: true, error: null };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
     }
   }
 
   async load(accountId: string): Promise<WhatsappSessionRow | null> {
-    const rows = await this.database.$queryRawUnsafe<{
-      accountId: string;
-      status: StoredSessionStatus;
-      phoneNumber: string | null;
-      creds: string;
-      keys: string;
-    }[]>(
-      `SELECT "accountId", "status", "phoneNumber", "creds", "keys" FROM ${TABLE} WHERE "accountId" = $1`,
-      accountId,
-    );
-
-    const row = rows[0];
+    const row = await this.database.whatsappSession.findUnique({ where: { accountId } });
     if (!row) return null;
 
     return {
       accountId: row.accountId,
-      status: row.status,
+      status: row.status as StoredSessionStatus,
       phoneNumber: row.phoneNumber,
       creds: row.creds
         ? parseWithBuffers<AuthenticationCreds>(decryptSecret(row.creds, this.encryptionKey))
@@ -114,33 +104,37 @@ export class WhatsappSessionStore {
   async saveCredentials(accountId: string, creds: AuthenticationCreds): Promise<void> {
     const payload = encryptSecret(stringifyWithBuffers(creds), this.encryptionKey);
 
-    await this.database.$queryRawUnsafe(
-      `
-      INSERT INTO ${TABLE} ("accountId", "status", "phoneNumber", "creds", "keys", "updatedAt")
-      VALUES ($1, 'PENDING', NULL, $2, $3, CURRENT_TIMESTAMP)
-      ON CONFLICT ("accountId") DO UPDATE
-        SET "creds" = EXCLUDED."creds", "updatedAt" = CURRENT_TIMESTAMP
-      `,
-      accountId,
-      payload,
-      this.encryptedEmptyKeys(),
-    );
+    await this.database.whatsappSession.upsert({
+      where: { accountId },
+      create: {
+        accountId,
+        status: 'PENDING',
+        creds: payload,
+        keys: this.encryptedEmptyKeys(),
+      },
+      update: {
+        creds: payload,
+        updatedAt: new Date(),
+      },
+    });
   }
 
   async saveKeys(accountId: string, keys: Record<string, Record<string, unknown>>): Promise<void> {
     const payload = encryptSecret(stringifyWithBuffers(keys), this.encryptionKey);
 
-    await this.database.$queryRawUnsafe(
-      `
-      INSERT INTO ${TABLE} ("accountId", "status", "phoneNumber", "creds", "keys", "updatedAt")
-      VALUES ($1, 'PENDING', NULL, $2, $3, CURRENT_TIMESTAMP)
-      ON CONFLICT ("accountId") DO UPDATE
-        SET "keys" = EXCLUDED."keys", "updatedAt" = CURRENT_TIMESTAMP
-      `,
-      accountId,
-      this.encryptedEmptyCreds(),
-      payload,
-    );
+    await this.database.whatsappSession.upsert({
+      where: { accountId },
+      create: {
+        accountId,
+        status: 'PENDING',
+        creds: this.encryptedEmptyCreds(),
+        keys: payload,
+      },
+      update: {
+        keys: payload,
+        updatedAt: new Date(),
+      },
+    });
   }
 
   async updateStatus(
@@ -148,25 +142,25 @@ export class WhatsappSessionStore {
     status: StoredSessionStatus,
     phoneNumber?: string | null,
   ): Promise<void> {
-    await this.database.$queryRawUnsafe(
-      `
-      INSERT INTO ${TABLE} ("accountId", "status", "phoneNumber", "creds", "keys", "updatedAt")
-      VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
-      ON CONFLICT ("accountId") DO UPDATE
-        SET "status" = EXCLUDED."status",
-            "phoneNumber" = COALESCE(EXCLUDED."phoneNumber", ${TABLE}."phoneNumber"),
-            "updatedAt" = CURRENT_TIMESTAMP
-      `,
-      accountId,
-      status,
-      phoneNumber ?? null,
-      this.encryptedEmptyCreds(),
-      this.encryptedEmptyKeys(),
-    );
+    await this.database.whatsappSession.upsert({
+      where: { accountId },
+      create: {
+        accountId,
+        status,
+        phoneNumber: phoneNumber ?? null,
+        creds: this.encryptedEmptyCreds(),
+        keys: this.encryptedEmptyKeys(),
+      },
+      update: {
+        status,
+        ...(phoneNumber ? { phoneNumber } : {}),
+        updatedAt: new Date(),
+      },
+    });
   }
 
   async clear(accountId: string): Promise<void> {
-    await this.database.$queryRawUnsafe(`DELETE FROM ${TABLE} WHERE "accountId" = $1`, accountId);
+    await this.database.whatsappSession.deleteMany({ where: { accountId } });
   }
 
   /** Implementação do SignalKeyStore do Baileys backed pelo Postgres. */
