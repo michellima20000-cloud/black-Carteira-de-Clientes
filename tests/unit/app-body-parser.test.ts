@@ -31,8 +31,6 @@ function testConfig(): AppConfig {
       secure: false,
       sameSite: 'lax',
       domain: undefined,
-      path: '/',
-      maxAgeSeconds: 604_800,
     },
     rateLimit: { max: 1_000, timeWindow: '1 minute' },
     loginRateLimit: { max: 100, timeWindow: '1 minute' },

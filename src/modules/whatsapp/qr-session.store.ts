@@ -46,6 +46,14 @@ export interface WhatsappSessionRow {
   keys: Record<string, Record<string, unknown>>;
 }
 
+/**
+ * Converte o valor bruto de `app-state-sync-key` no objeto proto que o
+ * Baileys v6 espera (mesma lógica do `use-multi-file-auth-state` oficial).
+ * Sem essa conversão o handshake falha com o erro 515
+ * ("Stream Errored - restart required").
+ */
+export type AppStateSyncKeyConverter = (value: unknown) => unknown;
+
 const TABLE = '"whatsapp_sessions"';
 
 /**
@@ -55,10 +63,23 @@ const TABLE = '"whatsapp_sessions"';
  * a cada start da API, evitando que o usuário precise escanear o QR novamente.
  */
 export class WhatsappSessionStore {
+  /** Cache em memória das chaves de sinal (evita perder o handshake em restarts). */
+  private readonly caches = new Map<string, Record<string, Record<string, unknown>>>();
+
   constructor(
     private readonly database: DatabaseClient,
     private readonly encryptionKey: string,
   ) {}
+
+  /** Verifica se a tabela de sessões está disponível no banco. */
+  async ping(): Promise<boolean> {
+    try {
+      await this.database.$queryRawUnsafe(`SELECT 1 FROM ${TABLE} LIMIT 1`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
 
   async load(accountId: string): Promise<WhatsappSessionRow | null> {
     const rows = await this.database.$queryRawUnsafe<{
@@ -149,8 +170,25 @@ export class WhatsappSessionStore {
   }
 
   /** Implementação do SignalKeyStore do Baileys backed pelo Postgres. */
-  createKeyStore(accountId: string, initial: Record<string, Record<string, unknown>>): SignalKeyStore {
-    const cache: Record<string, Record<string, unknown>> = structuredClone(initial);
+  createKeyStore(
+    accountId: string,
+    initial: Record<string, Record<string, unknown>>,
+    options: { convertAppStateSyncKey?: AppStateSyncKeyConverter | undefined } = {},
+  ): SignalKeyStore {
+    const persisted = structuredClone(initial);
+    const cached = this.caches.get(accountId);
+
+    const cache: Record<string, Record<string, unknown>> = {};
+    for (const [type, values] of Object.entries(persisted)) {
+      cache[type] = { ...values };
+    }
+    if (cached) {
+      for (const [type, values] of Object.entries(cached)) {
+        cache[type] = { ...(cache[type] ?? {}), ...values };
+      }
+    }
+    this.caches.set(accountId, cache);
+
     const saveKeys = (keys: Record<string, Record<string, unknown>>) =>
       this.saveKeys(accountId, keys);
 
@@ -159,9 +197,19 @@ export class WhatsappSessionStore {
         const data: Record<string, unknown> = {};
         const bucket = cache[type] ?? {};
         for (const id of ids) {
-          if (bucket[id] !== undefined) {
-            data[id] = bucket[id];
+          const value = bucket[id];
+          if (value === undefined) continue;
+
+          if (type === 'app-state-sync-key' && options.convertAppStateSyncKey) {
+            try {
+              data[id] = options.convertAppStateSyncKey(value);
+              continue;
+            } catch {
+              // Sem conversão o valor bruto é usado (evita quebrar o socket).
+            }
           }
+
+          data[id] = value;
         }
         return Promise.resolve(data as never);
       },

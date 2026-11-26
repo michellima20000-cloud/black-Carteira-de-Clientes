@@ -41,6 +41,8 @@ export interface QrSessionState {
   pairingCode: string | null;
   phoneNumber: string | null;
   error: string | null;
+  /** Indica se a sessão está sendo persistida no banco (ok = persistente). */
+  storage: 'ok' | 'unavailable';
   updatedAt: string;
 }
 
@@ -131,6 +133,7 @@ export class WhatsappSessionManager {
   private readonly states = new Map<string, QrSessionState>();
   private readonly reconnectTimers = new Map<string, NodeJS.Timeout>();
   private readonly disconnecting = new Set<string>();
+  private storageAvailable = true;
   private readonly store: WhatsappSessionStore;
   private readonly database: DatabaseClient;
   private readonly encryptionKey: string;
@@ -152,6 +155,7 @@ export class WhatsappSessionManager {
         pairingCode: null,
         phoneNumber: null,
         error: null,
+        storage: this.storageAvailable ? 'ok' : 'unavailable',
         updatedAt: new Date().toISOString(),
       }
     );
@@ -183,6 +187,7 @@ export class WhatsappSessionManager {
         pairingCode: null,
         phoneNumber: this.getState(accountId).phoneNumber,
         error: message,
+        storage: this.storageAvailable ? 'ok' : 'unavailable',
         updatedAt: new Date().toISOString(),
       });
       throw new AppError(500, 'WHATSAPP_QR_START_FAILED', message);
@@ -215,8 +220,10 @@ export class WhatsappSessionManager {
     let stored: WhatsappSessionRow | null = null;
     try {
       stored = await this.store.load(accountId);
+      this.storageAvailable = true;
     } catch (error) {
       // Sem persistência a sessão ainda funciona, mas precisa ser escaneada novamente.
+      this.storageAvailable = false;
       this.logger?.warn({ err: error, accountId }, 'Sessão anterior não pôde ser carregada');
     }
 
@@ -225,7 +232,12 @@ export class WhatsappSessionManager {
       options.creds ??
       (stored?.creds as AuthenticationCreds | null) ??
       baileys.initAuthCreds();
-    const keys = this.store.createKeyStore(accountId, stored?.keys ?? {});
+    const keys = this.store.createKeyStore(accountId, stored?.keys ?? {}, {
+      convertAppStateSyncKey: (value) =>
+        baileys.proto.Message.AppStateSyncKeyData.fromObject(
+          value as Parameters<typeof baileys.proto.Message.AppStateSyncKeyData.fromObject>[0],
+        ),
+    });
 
     // Se a consulta da versão mais recente falhar, usa uma versão estável conhecida.
     const latest = await baileys.fetchLatestBaileysVersion().catch(() => null);
@@ -251,6 +263,7 @@ export class WhatsappSessionManager {
       pairingCode: null,
       phoneNumber: stored?.phoneNumber ?? null,
       error: null,
+      storage: this.storageAvailable ? 'ok' : 'unavailable',
       updatedAt: new Date().toISOString(),
     };
 
@@ -322,12 +335,15 @@ export class WhatsappSessionManager {
         const statusCode = disconnect?.error?.output?.statusCode;
         const reason = disconnect?.error?.message;
         const loggedOut = statusCode === baileys.DisconnectReason.loggedOut;
+        const restartRequired = statusCode === baileys.DisconnectReason.restartRequired;
 
         const errorMessage = loggedOut
           ? 'Sessão encerrada no celular. Escaneie o QR Code novamente.'
-          : `Conexão com o WhatsApp caiu (código ${statusCode ?? 'desconhecido'})${
-              reason ? `: ${reason}` : '. Reconectando automaticamente...'
-            }`;
+          : restartRequired
+            ? 'O WhatsApp pediu para reiniciar a conexão. Reconectando automaticamente...'
+            : `Conexão com o WhatsApp caiu (código ${statusCode ?? 'desconhecido'})${
+                reason ? `: ${reason}` : '. Reconectando automaticamente...'
+              }`;
 
         this.setState(accountId, {
           ...this.getState(accountId),
@@ -348,7 +364,9 @@ export class WhatsappSessionManager {
           void this.store.clear(accountId).catch(() => undefined);
           this.sessions.delete(accountId);
         } else {
-          this.scheduleReconnect(accountId);
+          // 515 (restart required) e demais quedas: recria o socket mantendo
+          // as credenciais — o pareamento é preservado e volta sozinho.
+          this.scheduleReconnect(accountId, restartRequired ? 1_500 : 5_000);
         }
       }
     });
@@ -387,7 +405,7 @@ export class WhatsappSessionManager {
   }
 
   /** Reconecta automaticamente após uma queda inesperada de conexão. */
-  private scheduleReconnect(accountId: string): void {
+  private scheduleReconnect(accountId: string, delayMs = 5_000): void {
     this.clearReconnectTimer(accountId);
 
     const timer = setTimeout(() => {
@@ -399,7 +417,7 @@ export class WhatsappSessionManager {
       void this.start(accountId, reconnect).catch((error: unknown) => {
         this.logger?.warn({ err: error, accountId }, 'Falha ao reconectar o WhatsApp');
       });
-    }, 5_000);
+    }, delayMs);
 
     timer.unref?.();
     this.reconnectTimers.set(accountId, timer);
@@ -455,6 +473,7 @@ export class WhatsappSessionManager {
       pairingCode: null,
       phoneNumber: null,
       error: null,
+      storage: this.storageAvailable ? 'ok' : 'unavailable',
       updatedAt: new Date().toISOString(),
     });
 
@@ -468,11 +487,14 @@ export class WhatsappSessionManager {
         `SELECT "accountId" FROM "whatsapp_sessions" WHERE "status" = 'CONNECTED'`,
       );
 
+      this.storageAvailable = true;
+
       for (const row of rows) {
         this.logger?.info({ accountId: row.accountId }, 'Restaurando sessão do WhatsApp');
         await this.start(row.accountId);
       }
     } catch (error) {
+      this.storageAvailable = false;
       this.logger?.warn({ err: error }, 'Não foi possível restaurar as sessões do WhatsApp');
     }
   }
