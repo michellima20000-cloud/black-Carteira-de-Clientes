@@ -79,6 +79,7 @@ model Account {
   users                User[]
   refreshTokens        RefreshToken[]
   whatsappConfig       WhatsappConfig?
+  whatsappSession      WhatsappSession?
   quickReplies         QuickReply[]
   customers            Customer[]
   sales                Sale[]
@@ -147,6 +148,20 @@ model WhatsappConfig {
   account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
 
   @@map("whatsapp_configs")
+}
+
+model WhatsappSession {
+  accountId    String   @id @db.Uuid
+  status       String   @default("PENDING") @db.VarChar(40)
+  phoneNumber  String?  @db.VarChar(24)
+  creds        String   @default("") @db.Text
+  keys         String   @default("") @db.Text
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @db.Timestamptz(3)
+
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@map("whatsapp_sessions")
 }
 
 model Customer {
