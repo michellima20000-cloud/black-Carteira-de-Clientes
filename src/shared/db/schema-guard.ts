@@ -56,6 +56,19 @@ export async function ensureWhatsappConfigSchema(database: DatabaseClient): Prom
     );`,
   );
 
+  // Garante que todas as colunas do model existam (tabelas criadas por
+  // versões antigas do guard podem estar sem `createdAt`, por exemplo).
+  await run(
+    'columns_whatsapp_sessions',
+    `ALTER TABLE "whatsapp_sessions"
+      ADD COLUMN IF NOT EXISTS "status" VARCHAR(40) NOT NULL DEFAULT 'PENDING',
+      ADD COLUMN IF NOT EXISTS "phoneNumber" VARCHAR(24),
+      ADD COLUMN IF NOT EXISTS "creds" TEXT NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS "keys" TEXT NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP;`,
+  );
+
   await run(
     'fk_whatsapp_sessions',
     `ALTER TABLE "whatsapp_sessions"
