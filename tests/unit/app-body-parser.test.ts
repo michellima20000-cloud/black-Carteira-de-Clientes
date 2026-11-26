@@ -85,4 +85,23 @@ describe('parser de JSON tolerante a body vazio', () => {
       await app.close();
     }
   });
+
+  it('não responde 415 quando o content-type não é suportado', async () => {
+    const app = await buildApp({ config: testConfig(), database, redis, logger: false });
+    await app.ready();
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/auth/login',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        payload: 'email=teste@example.com',
+      });
+
+      expect(response.statusCode).not.toBe(415);
+      expect(response.statusCode).toBe(400);
+    } finally {
+      await app.close();
+    }
+  });
 });

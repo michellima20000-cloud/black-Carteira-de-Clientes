@@ -134,6 +134,13 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     },
   );
 
+  // Rotas sem payload (POST /whatsapp/qr/start, /disconnect...) podem chegar
+  // com qualquer content-type. Aceitamos e ignoramos o corpo para não
+  // responder 415 (Unsupported Media Type).
+  app.addContentTypeParser('*', { parseAs: 'string' }, (_request, _body, done) => {
+    done(null, undefined);
+  });
+
   registerAuthPlugin(app, tokens);
 
   const whatsappSessions = new WhatsappSessionManager({
