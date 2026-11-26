@@ -1,5 +1,6 @@
 import type { AuthenticationCreds, WASocket } from '@whiskeysockets/baileys';
 import type { DatabaseClient } from '../../shared/db/prisma';
+import { AppError } from '../../shared/http/app-error';
 import { TenantStore } from '../../shared/db/tenant-store';
 import { WhatsappSessionStore, type WhatsappSessionRow } from './qr-session.store';
 
@@ -46,6 +47,7 @@ export interface QrSessionState {
 interface SessionRuntime {
   socket: WASocket;
   state: QrSessionState;
+  creds: AuthenticationCreds;
 }
 
 function jidToPhone(jid: string | null | undefined): string {
@@ -78,18 +80,22 @@ function extractText(message: unknown): string {
   );
 }
 
+function describeError(error: unknown): string {
+  if (error instanceof AppError) return error.message;
+  if (error instanceof Error && error.message) return error.message;
+  return 'Não foi possível iniciar a sessão do WhatsApp.';
+}
+
 export interface WhatsappSessionManagerOptions {
   database: DatabaseClient;
   encryptionKey: string;
-  logger?: { info: (payload: unknown, message?: string) => void; warn: (payload: unknown, message?: string) => void; error: (payload: unknown, message?: string) => void };
+  logger?: {
+    info: (payload: unknown, message?: string) => void;
+    warn: (payload: unknown, message?: string) => void;
+    error: (payload: unknown, message?: string) => void;
+  };
 }
 
-/**
- * Gerencia uma sessão do WhatsApp Web por conta usando Baileys.
- *
- * O usuário conecta lendo um QR Code no próprio celular (Aparelhos conectados),
- * sem precisar de conta Meta Business, token ou webhook.
- */
 /** Logger silencioso compatível com a interface esperada pelo Baileys (pino-like). */
 interface SocketLogger {
   level: string;
@@ -114,8 +120,17 @@ function createSilentLogger(): SocketLogger {
   };
 }
 
+/**
+ * Gerencia uma sessão do WhatsApp Web por conta usando Baileys.
+ *
+ * O usuário conecta lendo um QR Code no próprio celular (Aparelhos conectados),
+ * sem precisar de conta Meta Business, token ou webhook.
+ */
 export class WhatsappSessionManager {
   private readonly sessions = new Map<string, SessionRuntime>();
+  private readonly states = new Map<string, QrSessionState>();
+  private readonly reconnectTimers = new Map<string, NodeJS.Timeout>();
+  private readonly disconnecting = new Set<string>();
   private readonly store: WhatsappSessionStore;
   private readonly database: DatabaseClient;
   private readonly encryptionKey: string;
@@ -130,7 +145,8 @@ export class WhatsappSessionManager {
 
   getState(accountId: string): QrSessionState {
     return (
-      this.sessions.get(accountId)?.state ?? {
+      this.sessions.get(accountId)?.state ??
+      this.states.get(accountId) ?? {
         status: 'IDLE',
         qr: null,
         pairingCode: null,
@@ -145,11 +161,49 @@ export class WhatsappSessionManager {
     return this.getState(accountId).status === 'CONNECTED';
   }
 
-  /** Inicia (ou reinicia) a sessão e devolve o estado atual (com QR, quando disponível). */
-  async start(accountId: string): Promise<QrSessionState> {
+  /**
+   * Inicia a sessão e devolve o estado atual (com QR, quando disponível).
+   *
+   * Por padrão NÃO reinicia uma sessão já ativa: reiniciar invalidaria o QR
+   * Code que o usuário está escaneando naquele momento. Use `force: true`
+   * apenas para gerar um QR novo.
+   */
+  async start(
+    accountId: string,
+    options: { force?: boolean; creds?: AuthenticationCreds } = {},
+  ): Promise<QrSessionState> {
+    try {
+      return await this.openSession(accountId, options);
+    } catch (error) {
+      const message = describeError(error);
+      this.logger?.error({ err: error, accountId }, 'Falha ao iniciar a sessão do WhatsApp');
+      this.setState(accountId, {
+        status: 'ERROR',
+        qr: null,
+        pairingCode: null,
+        phoneNumber: this.getState(accountId).phoneNumber,
+        error: message,
+        updatedAt: new Date().toISOString(),
+      });
+      throw new AppError(500, 'WHATSAPP_QR_START_FAILED', message);
+    }
+  }
+
+  private async openSession(
+    accountId: string,
+    options: { force?: boolean; creds?: AuthenticationCreds },
+  ): Promise<QrSessionState> {
     const existing = this.sessions.get(accountId);
+
+    if (existing && !options.force) {
+      const active = ['CONNECTING', 'AWAITING_SCAN', 'CONNECTED'].includes(existing.state.status);
+      if (active) {
+        return this.getState(accountId);
+      }
+    }
+
     if (existing) {
-      this.setState(accountId, { ...existing.state, status: 'CONNECTING', qr: null, error: null });
+      this.clearReconnectTimer(accountId);
       try {
         existing.socket.end(undefined);
       } catch {
@@ -168,10 +222,14 @@ export class WhatsappSessionManager {
 
     const baileys = await loadBaileys();
     const creds: AuthenticationCreds =
-      (stored?.creds as AuthenticationCreds | null) ?? baileys.initAuthCreds();
+      options.creds ??
+      (stored?.creds as AuthenticationCreds | null) ??
+      baileys.initAuthCreds();
     const keys = this.store.createKeyStore(accountId, stored?.keys ?? {});
-    const latest = await baileys.fetchLatestBaileysVersion();
-    const version = latest.version;
+
+    // Se a consulta da versão mais recente falhar, usa uma versão estável conhecida.
+    const latest = await baileys.fetchLatestBaileysVersion().catch(() => null);
+    const version = latest?.version ?? ([2, 3000, 1029133823] as [number, number, number]);
 
     const socket = baileys.makeWASocket({
       version,
@@ -183,6 +241,7 @@ export class WhatsappSessionManager {
       generateHighQualityLinkPreview: false,
       printQRInTerminal: false,
       connectTimeoutMs: 60_000,
+      retryRequestDelayMs: 500,
       getMessage: () => Promise.resolve(undefined),
     });
 
@@ -195,11 +254,20 @@ export class WhatsappSessionManager {
       updatedAt: new Date().toISOString(),
     };
 
-    this.sessions.set(accountId, { socket, state });
+    this.sessions.set(accountId, { socket, state, creds });
     this.setState(accountId, state);
 
     socket.ev.on('creds.update', () => {
-      void this.store.saveCredentials(accountId, socket.authState.creds).catch((error: unknown) => {
+      const currentCreds = socket.authState.creds;
+      const runtime = this.sessions.get(accountId);
+      if (runtime) runtime.creds = currentCreds;
+
+      const phoneNumber = jidToPhone(currentCreds.me?.id);
+      if (phoneNumber) {
+        this.setState(accountId, { ...this.getState(accountId), phoneNumber });
+      }
+
+      void this.store.saveCredentials(accountId, currentCreds).catch((error: unknown) => {
         this.logger?.error({ err: error, accountId }, 'Falha ao salvar credenciais da sessão');
       });
     });
@@ -225,7 +293,7 @@ export class WhatsappSessionManager {
       }
 
       if (update.connection === 'open') {
-        const phoneNumber = jidToPhone(socket.user?.id ?? undefined);
+        const phoneNumber = jidToPhone(socket.user?.id ?? socket.authState.creds.me?.id);
         this.setState(accountId, {
           ...this.getState(accountId),
           status: 'CONNECTED',
@@ -242,22 +310,46 @@ export class WhatsappSessionManager {
       }
 
       if (update.connection === 'close') {
-        const statusCode = (update.lastDisconnect as { error?: { output?: { statusCode?: number } } })
-          ?.error?.output?.statusCode;
+        // Desconexão solicitada pelo usuário: não é erro.
+        if (this.disconnecting.has(accountId)) {
+          this.sessions.delete(accountId);
+          return;
+        }
+
+        const disconnect = update.lastDisconnect as
+          | { error?: { output?: { statusCode?: number }; message?: string } }
+          | undefined;
+        const statusCode = disconnect?.error?.output?.statusCode;
+        const reason = disconnect?.error?.message;
+        const loggedOut = statusCode === baileys.DisconnectReason.loggedOut;
+
+        const errorMessage = loggedOut
+          ? 'Sessão encerrada no celular. Escaneie o QR Code novamente.'
+          : `Conexão com o WhatsApp caiu (código ${statusCode ?? 'desconhecido'})${
+              reason ? `: ${reason}` : '. Reconectando automaticamente...'
+            }`;
 
         this.setState(accountId, {
           ...this.getState(accountId),
           status: 'DISCONNECTED',
           qr: null,
-          error:
-            statusCode === baileys.DisconnectReason.loggedOut
-              ? 'Sessão encerrada no celular. Escaneie o QR Code novamente.'
-              : null,
+          error: errorMessage,
         });
+
+        this.logger?.error({ accountId, statusCode, reason }, 'Sessão do WhatsApp encerrada');
 
         void this.store
           .updateStatus(accountId, 'DISCONNECTED')
           .catch(() => undefined);
+
+        if (loggedOut) {
+          // Sessão encerrada no celular: limpa as credenciais para o próximo
+          // QR Code começar de um pareamento totalmente novo.
+          void this.store.clear(accountId).catch(() => undefined);
+          this.sessions.delete(accountId);
+        } else {
+          this.scheduleReconnect(accountId);
+        }
       }
     });
 
@@ -270,7 +362,12 @@ export class WhatsappSessionManager {
         const body = extractText(message.message);
         if (!body) continue;
 
-        const fromPhone = jidToPhone(message.key.remoteJid);
+        const remoteJid = message.key.remoteJid ?? '';
+        if (!remoteJid || remoteJid.endsWith('@g.us') || remoteJid.endsWith('@broadcast')) {
+          continue;
+        }
+
+        const fromPhone = jidToPhone(remoteJid);
         if (!fromPhone) continue;
 
         void new TenantStore(this.database, accountId)
@@ -287,6 +384,33 @@ export class WhatsappSessionManager {
     });
 
     return this.getState(accountId);
+  }
+
+  /** Reconecta automaticamente após uma queda inesperada de conexão. */
+  private scheduleReconnect(accountId: string): void {
+    this.clearReconnectTimer(accountId);
+
+    const timer = setTimeout(() => {
+      this.reconnectTimers.delete(accountId);
+      const runtime = this.sessions.get(accountId);
+      const reconnect = runtime?.creds
+        ? { force: true, creds: runtime.creds }
+        : { force: true };
+      void this.start(accountId, reconnect).catch((error: unknown) => {
+        this.logger?.warn({ err: error, accountId }, 'Falha ao reconectar o WhatsApp');
+      });
+    }, 5_000);
+
+    timer.unref?.();
+    this.reconnectTimers.set(accountId, timer);
+  }
+
+  private clearReconnectTimer(accountId: string): void {
+    const timer = this.reconnectTimers.get(accountId);
+    if (timer) {
+      clearTimeout(timer);
+      this.reconnectTimers.delete(accountId);
+    }
   }
 
   /** Envia uma mensagem pelo WhatsApp Web. Retorna false quando não há sessão ativa. */
@@ -306,6 +430,9 @@ export class WhatsappSessionManager {
   }
 
   async disconnect(accountId: string): Promise<void> {
+    this.clearReconnectTimer(accountId);
+    this.disconnecting.add(accountId);
+
     const runtime = this.sessions.get(accountId);
     if (runtime) {
       try {
@@ -321,7 +448,7 @@ export class WhatsappSessionManager {
       this.sessions.delete(accountId);
     }
 
-    await this.store.clear(accountId);
+    await this.store.clear(accountId).catch(() => undefined);
     this.setState(accountId, {
       status: 'IDLE',
       qr: null,
@@ -330,6 +457,8 @@ export class WhatsappSessionManager {
       error: null,
       updatedAt: new Date().toISOString(),
     });
+
+    this.disconnecting.delete(accountId);
   }
 
   /** Restaura sessões já conectadas quando a API sobe. */
@@ -349,15 +478,13 @@ export class WhatsappSessionManager {
   }
 
   private setState(accountId: string, state: QrSessionState): void {
-    const runtime = this.sessions.get(accountId);
     const next = { ...state, updatedAt: new Date().toISOString() };
+    const runtime = this.sessions.get(accountId);
+
     if (runtime) {
       runtime.state = next;
     } else {
-      this.sessions.set(accountId, {
-        socket: undefined as unknown as WASocket,
-        state: next,
-      });
+      this.states.set(accountId, next);
     }
   }
 

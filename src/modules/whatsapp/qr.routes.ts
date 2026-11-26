@@ -8,7 +8,7 @@ export interface WhatsappQrRoutesOptions {
 
 function toFriendlyError(error: unknown): string {
   if (error instanceof AppError) return error.message;
-  if (error instanceof Error) return error.message;
+  if (error instanceof Error && error.message) return error.message;
   return 'Não foi possível iniciar a sessão do WhatsApp.';
 }
 
@@ -28,27 +28,25 @@ export function registerWhatsappQrRoutes(
       return { data: state };
     } catch (error) {
       app.log.error({ err: error }, 'Falha ao iniciar a sessão do WhatsApp');
-      return {
-        error: {
-          code: 'WHATSAPP_QR_START_FAILED',
-          message: toFriendlyError(error),
-        },
-      };
+      throw new AppError(
+        500,
+        'WHATSAPP_QR_START_FAILED',
+        toFriendlyError(error),
+      );
     }
   });
 
   app.post('/whatsapp/qr/refresh', { preHandler: app.authenticate }, async (request) => {
     try {
-      const state = await sessions.start(request.authContext!.accountId);
+      const state = await sessions.start(request.authContext!.accountId, { force: true });
       return { data: state };
     } catch (error) {
       app.log.error({ err: error }, 'Falha ao renovar a sessão do WhatsApp');
-      return {
-        error: {
-          code: 'WHATSAPP_QR_REFRESH_FAILED',
-          message: toFriendlyError(error),
-        },
-      };
+      throw new AppError(
+        500,
+        'WHATSAPP_QR_REFRESH_FAILED',
+        toFriendlyError(error),
+      );
     }
   });
 

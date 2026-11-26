@@ -1,7 +1,40 @@
 import type { AuthenticationCreds, SignalDataSet, SignalKeyStore } from '@whiskeysockets/baileys';
-import { BufferJSON } from '@whiskeysockets/baileys';
 import type { DatabaseClient } from '../../shared/db/prisma';
 import { decryptSecret, encryptSecret } from '../../shared/security/secret-box';
+
+/**
+ * Serialização de Buffers no formato usado pelo Baileys.
+ *
+ * Implementado localmente (em vez de importar `BufferJSON` do Baileys) para que
+ * o pacote do Baileys NÃO seja carregado durante o boot da API — assim uma
+ * falha na biblioteca jamais derruba o serviço inteiro.
+ */
+function bufferReplacer(_key: string, value: unknown): unknown {
+  if (Buffer.isBuffer(value)) {
+    return { type: 'Buffer', data: Array.from(value) };
+  }
+  return value;
+}
+
+function bufferReviver(_key: string, value: unknown): unknown {
+  if (
+    value &&
+    typeof value === 'object' &&
+    (value as { type?: unknown }).type === 'Buffer' &&
+    Array.isArray((value as { data?: unknown }).data)
+  ) {
+    return Buffer.from((value as { data: number[] }).data);
+  }
+  return value;
+}
+
+function stringifyWithBuffers(value: unknown): string {
+  return JSON.stringify(value, bufferReplacer);
+}
+
+function parseWithBuffers<T>(value: string): T {
+  return JSON.parse(value, bufferReviver) as T;
+}
 
 export type StoredSessionStatus = 'PENDING' | 'CONNECTED' | 'DISCONNECTED';
 
@@ -46,21 +79,19 @@ export class WhatsappSessionStore {
       accountId: row.accountId,
       status: row.status,
       phoneNumber: row.phoneNumber,
-      creds: row.creds ? (JSON.parse(decryptSecret(row.creds, this.encryptionKey)) as AuthenticationCreds) : null,
+      creds: row.creds
+        ? parseWithBuffers<AuthenticationCreds>(decryptSecret(row.creds, this.encryptionKey))
+        : null,
       keys: row.keys
-        ? (JSON.parse(decryptSecret(row.keys, this.encryptionKey)) as Record<
-            string,
-            Record<string, unknown>
-          >)
+        ? parseWithBuffers<Record<string, Record<string, unknown>>>(
+            decryptSecret(row.keys, this.encryptionKey),
+          )
         : {},
     };
   }
 
   async saveCredentials(accountId: string, creds: AuthenticationCreds): Promise<void> {
-    const payload = encryptSecret(
-      JSON.stringify(creds, BufferJSON.replacer),
-      this.encryptionKey,
-    );
+    const payload = encryptSecret(stringifyWithBuffers(creds), this.encryptionKey);
 
     await this.database.$queryRawUnsafe(
       `
@@ -76,7 +107,7 @@ export class WhatsappSessionStore {
   }
 
   async saveKeys(accountId: string, keys: Record<string, Record<string, unknown>>): Promise<void> {
-    const payload = encryptSecret(JSON.stringify(keys, BufferJSON.replacer), this.encryptionKey);
+    const payload = encryptSecret(stringifyWithBuffers(keys), this.encryptionKey);
 
     await this.database.$queryRawUnsafe(
       `

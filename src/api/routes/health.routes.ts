@@ -45,6 +45,8 @@ export function registerHealthRoutes(app: FastifyInstance, options: HealthRoutes
       status,
       database,
       redis,
+      // Commit implantado (Render) — ajuda a conferir qual versão está no ar.
+      version: process.env.RENDER_GIT_COMMIT ?? null,
       timestamp: new Date().toISOString(),
     });
   });
