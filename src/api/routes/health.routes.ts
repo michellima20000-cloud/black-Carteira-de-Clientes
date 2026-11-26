@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import type { DatabaseClient } from '../../shared/db/prisma';
+import { getSchemaGuardStatus } from '../../shared/db/schema-guard';
 
 export interface RedisHealthClient {
   ping(): Promise<string>;
@@ -47,6 +48,8 @@ export function registerHealthRoutes(app: FastifyInstance, options: HealthRoutes
       redis,
       // Commit implantado (Render) — ajuda a conferir qual versão está no ar.
       version: process.env.RENDER_GIT_COMMIT ?? null,
+      // Diagnóstico do schema (tabelas criadas no startup).
+      schema: getSchemaGuardStatus(),
       timestamp: new Date().toISOString(),
     });
   });
