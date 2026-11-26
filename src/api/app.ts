@@ -111,6 +111,29 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     timeWindow: config.rateLimit.timeWindow,
   });
 
+  // Parser de JSON tolerante a body vazio: várias rotas (ex.: iniciar o QR
+  // Code) são chamadas via POST sem payload, e o cliente pode enviar
+  // `Content-Type: application/json` mesmo assim.
+  app.addContentTypeParser(
+    'application/json',
+    { parseAs: 'string' },
+    (request, body, done) => {
+      const raw = typeof body === 'string' ? body.trim() : '';
+      if (!raw) {
+        done(null, undefined);
+        return;
+      }
+
+      try {
+        done(null, JSON.parse(raw));
+      } catch (error) {
+        const parseError = error as Error & { statusCode?: number };
+        parseError.statusCode = 400;
+        done(parseError, undefined);
+      }
+    },
+  );
+
   registerAuthPlugin(app, tokens);
 
   const whatsappSessions = new WhatsappSessionManager({
