@@ -144,6 +144,20 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       });
     }
 
+    // Erros do próprio Fastify (ex.: body vazio com content-type JSON) já têm
+    // status e mensagem prontos — respeitamos para não mascarar como 500.
+    const fastifyError = error as { statusCode?: unknown; code?: string; message?: string };
+    const fastifyStatus = fastifyError.statusCode;
+    if (typeof fastifyStatus === 'number' && fastifyStatus >= 400 && fastifyStatus < 500) {
+      request.log.warn({ err: error }, 'Requisição inválida');
+      return reply.code(fastifyStatus).send({
+        error: {
+          code: fastifyError.code ?? 'BAD_REQUEST',
+          message: fastifyError.message || 'Requisição inválida.',
+        },
+      });
+    }
+
     request.log.error({ err: error }, 'Erro não tratado');
     return reply.code(500).send({
       error: {
